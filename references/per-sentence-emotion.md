@@ -3,7 +3,7 @@
 ## 核心原则
 
 **MiniMax T2A v2 不支持文本内联情绪标签**(没有 `<emotion=happy>` 这种语法)。
-**逐句情绪 = 拆段合成 + 每段独立 emotion + ffmpeg concat**。
+**逐句情绪 = 拆段合成 + 每段独立 emotion + 段间短静音 + ffmpeg concat**。
 正好契合"长段必须分段"的硬规则(见 `length-rules.md`)。
 
 ## 5 个安全 emotion(4 轮 A/B 后定)
@@ -48,9 +48,10 @@
   "voice_id": "<USER_VOICE_ID>",
   "model": "speech-2.8-hd",
   "speed": 1.2,
+  "default_pause_after": 0.18,
   "segments": [
-    {"id": 1, "text": "...", "emotion": "happy", "est_duration": 5.5},
-    {"id": 2, "text": "...", "emotion": "surprised", "est_duration": 4.7},
+    {"id": 1, "text": "...", "emotion": "happy", "est_duration": 5.5, "pause_after": 0.35},
+    {"id": 2, "text": "...", "emotion": "surprised", "est_duration": 4.7, "pause_after": 0.18},
     ...
   ]
 }
@@ -76,12 +77,20 @@
 
 ## 拼接公式
 
-```bash
-# 段间无静音(默认)
-ffmpeg -f concat -safe 0 -i segs.txt -c copy out/narration.mp3
+默认使用带断句停顿的拼接。`scripts/narrate-emotion.sh` 会先生成 `out/narration_no_pauses.mp3`，再按 `pause_after` 插入静音并重编码出 `out/narration.mp3`。
 
-# 段间加 100ms 静音(如果衔接不自然)
-ffmpeg -f concat -safe 0 -i segs_with_silence.txt -c copy out/narration.mp3
+停顿建议:
+- 普通句间: `pause_after: 0.18`
+- 操作步骤 / 段落转场: `pause_after: 0.35` 到 `0.45`
+- 强强调或章节切换: 最多 `0.6`
+- 收尾段: 默认 `0`
+
+```bash
+# 无额外静音备份
+ffmpeg -f concat -safe 0 -i segs.txt -c copy out/narration_no_pauses.mp3
+
+# 按 pause_after 插入静音后的最终版
+ffmpeg -f concat -safe 0 -i segs_with_silence.txt -ar 32000 -ac 1 -codec:a libmp3lame -b:a 128k out/narration.mp3
 ```
 
 `segs.txt` 格式:
@@ -96,6 +105,7 @@ file 'seg2.mp3'
 - [ ] 每段时长 ≤ 15s(超出报警 + 让 agent 重拆)
 - [ ] 每段 emotion ∈ 安全集
 - [ ] 文本无叹词无标签
+- [ ] 用 `pause_after` 表达停顿,不要把 `<#x#>` 写进文本
 - [ ] 拼接后总时长在预期 ±10% 内
 
 ## EP4 Hook 实战示例
@@ -105,13 +115,14 @@ file 'seg2.mp3'
   "voice_id": "NyxVoice2026",
   "model": "speech-2.8-hd",
   "speed": 1.2,
+  "default_pause_after": 0.18,
   "segments": [
-    {"id": 1, "text": "上期我准备撸起袖子做一期专业的视频,还专门拆了飓风影视的分镜节奏。", "emotion": "happy",     "est_duration": 5.5},
-    {"id": 2, "text": "结果发给朋友看,他说:还行吧,但…… 有点怪。",                       "emotion": "surprised", "est_duration": 4.7},
-    {"id": 3, "text": "好吧 — 作为一个主播,我普通话确实不够字正腔圆。",                      "emotion": "calm",      "est_duration": 3.7},
-    {"id": 4, "text": "但我一直坚持自己录,是想留点个人特色 — 音色就是我的一部分。",              "emotion": "calm",      "est_duration": 4.7},
-    {"id": 5, "text": "能不能既保留我的音色,又把发音补上?",                                "emotion": "surprised", "est_duration": 3.4},
-    {"id": 6, "text": "能 — 刚刚这一整段,就是 AI 用我自己的声音配的。",                       "emotion": "happy",     "est_duration": 4.0}
+    {"id": 1, "text": "上期我准备撸起袖子做一期专业的视频,还专门拆了飓风影视的分镜节奏。", "emotion": "happy",     "est_duration": 5.5, "pause_after": 0.18},
+    {"id": 2, "text": "结果发给朋友看,他说:还行吧,但…… 有点怪。",                       "emotion": "surprised", "est_duration": 4.7, "pause_after": 0.25},
+    {"id": 3, "text": "好吧 — 作为一个主播,我普通话确实不够字正腔圆。",                      "emotion": "calm",      "est_duration": 3.7, "pause_after": 0.18},
+    {"id": 4, "text": "但我一直坚持自己录,是想留点个人特色 — 音色就是我的一部分。",              "emotion": "calm",      "est_duration": 4.7, "pause_after": 0.18},
+    {"id": 5, "text": "能不能既保留我的音色,又把发音补上?",                                "emotion": "surprised", "est_duration": 3.4, "pause_after": 0.35},
+    {"id": 6, "text": "能 — 刚刚这一整段,就是 AI 用我自己的声音配的。",                       "emotion": "happy",     "est_duration": 4.0, "pause_after": 0}
   ]
 }
 ```

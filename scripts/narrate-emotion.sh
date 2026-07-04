@@ -2,7 +2,7 @@
 # narrate-emotion.sh — 用 emotion_plan.json 逐段合成口播 mp3
 #
 # 输入:emotion_plan.json (agent 拆句标情绪后的产物,符合 templates/emotion_plan.schema.json)
-# 输出:out/narration.mp3 + out/narration_segments/seg{N}.mp3 + out/emotion_plan.html
+# 输出:out/narration.mp3 + out/narration_no_pauses.mp3 + out/narration_segments/seg{N}.mp3 + out/emotion_plan.html
 #
 # 用法:
 #   bash narrate-emotion.sh emotion_plan.json [out_dir]
@@ -28,7 +28,7 @@ python3 - <<PYEOF
 import json, sys
 plan = json.load(open("$PLAN_FILE"))
 SAFE = {"happy", "surprised", "calm", "sad", "fluent"}
-BLACKLIST = ["啦", "诶", "(breath)", "(chuckle)", "(sigh)", "<#"]
+BLACKLIST = ["啦", "啊", "诶", "(breath)", "(chuckle)", "(sigh)", "<#"]
 errors = []
 for s in plan["segments"]:
     if s["emotion"] not in SAFE:
@@ -38,6 +38,10 @@ for s in plan["segments"]:
     for bad in BLACKLIST:
         if bad in s["text"]:
             errors.append(f"seg{s['id']}: 包含黑名单 '{bad}'")
+    pause = s.get("pause_after")
+    if pause is not None:
+        if not isinstance(pause, (int, float)) or pause < 0 or pause > 2:
+            errors.append(f"seg{s['id']}: pause_after 必须是 0-2 秒之间的数字")
 if errors:
     print("校验失败:")
     for e in errors: print(f"  ❌ {e}")
@@ -70,7 +74,55 @@ CONCAT_FILE="$OUT_DIR/narration_segments/concat.txt"
 for i in $(seq 1 $SEG_COUNT); do
   echo "file 'seg${i}.mp3'" >> "$CONCAT_FILE"
 done
-ffmpeg -f concat -safe 0 -i "$CONCAT_FILE" -c copy -y "$OUT_DIR/narration.mp3" 2>&1 | tail -1
+ffmpeg -f concat -safe 0 -i "$CONCAT_FILE" -c copy -y "$OUT_DIR/narration_no_pauses.mp3" 2>&1 | tail -1
+
+echo "      插入断句停顿 ..."
+PAUSE_LIST="$OUT_DIR/narration_segments/pause_durations.txt"
+CONCAT_PAUSE_FILE="$OUT_DIR/narration_segments/concat_with_pauses.txt"
+python3 - <<PYEOF
+import json
+from pathlib import Path
+
+plan = json.load(open("$PLAN_FILE"))
+default_pause = float(plan.get("default_pause_after", 0.18))
+seg_dir = Path("$OUT_DIR/narration_segments")
+pause_values = {}
+concat_lines = []
+
+def pause_code(value):
+    return f"{int(round(value * 1000)):04d}"
+
+segments = plan["segments"]
+for index, segment in enumerate(segments, start=1):
+    concat_lines.append(f"file 'seg{index}.mp3'")
+    if index == len(segments):
+        pause = float(segment.get("pause_after", 0))
+    else:
+        pause = float(segment.get("pause_after", default_pause))
+    if pause > 0:
+        code = pause_code(pause)
+        pause_values[code] = pause
+        concat_lines.append(f"file 'silence_{code}.mp3'")
+
+Path("$CONCAT_PAUSE_FILE").write_text("\n".join(concat_lines) + "\n", encoding="utf-8")
+Path("$PAUSE_LIST").write_text(
+    "".join(f"{code} {pause_values[code]:.3f}\n" for code in sorted(pause_values)),
+    encoding="utf-8",
+)
+print(f"      ✓ {len(segments)} 段, {len(pause_values)} 种停顿")
+PYEOF
+
+while read -r CODE DUR; do
+  [ -z "$CODE" ] && continue
+  ffmpeg -hide_banner -loglevel error -y \
+    -f lavfi -i anullsrc=r=32000:cl=mono \
+    -t "$DUR" -codec:a libmp3lame -b:a 128k \
+    "$OUT_DIR/narration_segments/silence_${CODE}.mp3"
+done < "$PAUSE_LIST"
+
+ffmpeg -f concat -safe 0 -i "$CONCAT_PAUSE_FILE" \
+  -ar 32000 -ac 1 -codec:a libmp3lame -b:a 128k \
+  -y "$OUT_DIR/narration.mp3" 2>&1 | tail -1
 
 # 总时长
 TOTAL=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUT_DIR/narration.mp3")
@@ -96,13 +148,16 @@ th {{ background: #1a1a24; color: #FFD64D; }}
 .sad {{ background: #94a3b8; color: #000; }}
 .fluent {{ background: #4ade80; color: #000; }}
 </style></head><body>
-<h1>📢 emotion_plan · {plan['voice_id']}</h1>
-<p>共 {len(plan['segments'])} 段 · 总时长 {total:.2f}s · $SIZE_KB KB</p>
-<table><tr><th>#</th><th>Emotion</th><th>文本</th><th>估时</th></tr>
+<h1>emotion_plan · {plan['voice_id']}</h1>
+<p>共 {len(plan['segments'])} 段 · 已插入断句停顿 · 总时长 {total:.2f}s · $SIZE_KB KB</p>
+<table><tr><th>#</th><th>Emotion</th><th>文本</th><th>估时</th><th>停顿</th></tr>
 """
-for s in plan['segments']:
+for index, s in enumerate(plan['segments'], start=1):
+    pause = s.get('pause_after', plan.get('default_pause_after', 0.18))
+    if index == len(plan['segments']) and 'pause_after' not in s:
+        pause = 0
     html += f"<tr><td>{s['id']}</td><td><span class='emotion {s['emotion']}'>{s['emotion']}</span></td>"
-    html += f"<td>{s['text']}</td><td>{s.get('est_duration', '-')}</td></tr>"
+    html += f"<td>{s['text']}</td><td>{s.get('est_duration', '-')}</td><td>{pause}</td></tr>"
 html += "</table></body></html>"
 open("$OUT_DIR/emotion_plan.html", "w").write(html)
 print("  ✓ emotion_plan.html")
@@ -110,5 +165,6 @@ PYEOF
 
 echo
 echo "🎉 narration.mp3 (${TOTAL}s, ${SIZE_KB}KB) → $OUT_DIR/narration.mp3"
+echo "   无停顿备份 → $OUT_DIR/narration_no_pauses.mp3"
 echo "   单段 → $OUT_DIR/narration_segments/seg{1..$SEG_COUNT}.mp3"
 echo "   可视化 → $OUT_DIR/emotion_plan.html"

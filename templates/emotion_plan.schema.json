@@ -20,6 +20,13 @@
       "maximum": 1.3,
       "default": 1.2
     },
+    "default_pause_after": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 2,
+      "default": 0.18,
+      "description": "段间默认停顿秒数;未设置 pause_after 的非末段使用此值"
+    },
     "pitch": {
       "type": "integer",
       "const": 0,
@@ -50,6 +57,12 @@
             "maximum": 15.0,
             "description": "估计音频时长(秒),≤ 15s 硬约束"
           },
+          "pause_after": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "本段后的静音停顿秒数;普通句 0.18,步骤/段落 0.35-0.45,末段默认 0"
+          },
           "_note": {
             "type": "string",
             "description": "可选,agent 标注的语义/语气说明"
@@ -63,10 +76,11 @@
       "voice_id": "NyxVoice2026",
       "model": "speech-2.8-hd",
       "speed": 1.2,
+      "default_pause_after": 0.18,
       "pitch": 0,
       "segments": [
-        {"id": 1, "text": "上期我准备撸起袖子做一期专业的视频。", "emotion": "happy",     "est_duration": 4.2, "_note": "铺垫"},
-        {"id": 2, "text": "结果发给朋友看,他说有点怪。",            "emotion": "surprised", "est_duration": 3.5, "_note": "转折"}
+        {"id": 1, "text": "上期我准备撸起袖子做一期专业的视频。", "emotion": "happy",     "est_duration": 4.2, "pause_after": 0.35, "_note": "铺垫"},
+        {"id": 2, "text": "结果发给朋友看,他说有点怪。",            "emotion": "surprised", "est_duration": 3.5, "pause_after": 0, "_note": "转折"}
       ]
     }
   ]
